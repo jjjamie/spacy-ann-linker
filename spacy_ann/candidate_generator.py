@@ -82,6 +82,36 @@ class CandidateGenerator:
         self.vectorizer = vectorizer
         self.alias_tfidfs = alias_tfidfs
 
+    def _fit_ann_index(self, alias_tfidfs, msg: Printer, verbose: bool):
+        # nmslib hyperparameters (very important)
+        # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
+        # m_parameter = 100
+        # # `C` for Construction. Set to the maximum recommended value
+        # # Improves recall at the expense of longer indexing time
+        # construction = 2000
+        # num_threads = 60  # set based on the machine
+        index_params = {
+            "M": self.m_parameter,
+            "indexThreadQty": self.n_threads,
+            "efConstruction": self.ef_construction,
+            "post": 0,
+        }
+
+        msg.text(f"Fitting ann index on {len(alias_tfidfs)} aliases")
+        start_time = timer()
+        ann_index = nmslib.init(
+            method="hnsw", space="cosinesimil_sparse", data_type=nmslib.DataType.SPARSE_VECTOR
+        )
+        ann_index.addDataPointBatch(alias_tfidfs)
+        ann_index.createIndex(index_params, print_progress=verbose)
+        query_time_params = {"efSearch": self.ef_search}
+        ann_index.setQueryTimeParams(query_time_params)
+        end_time = timer()
+        total_time = end_time - start_time
+        msg.text(f"Fitting ann index took {round(total_time)} seconds")
+        return ann_index
+
+
     def fit(self, kb_aliases: List[str], verbose: bool = False):
         """Build tfidf vectorizer and ann index.
         Warning: Running this function can take a lot of memory
@@ -96,20 +126,6 @@ class CandidateGenerator:
 
         # kb_aliases = self.kb.get_alias_strings()
         short_aliases = set([a for a in kb_aliases if len(a) < 4])
-
-        # nmslib hyperparameters (very important)
-        # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
-        # m_parameter = 100
-        # # `C` for Construction. Set to the maximum recommended value
-        # # Improves recall at the expense of longer indexing time
-        # construction = 2000
-        # num_threads = 60  # set based on the machine
-        index_params = {
-            "M": self.m_parameter,
-            "indexThreadQty": self.n_threads,
-            "efConstruction": self.ef_construction,
-            "post": 0,
-        }
 
         # NOTE: here we are creating the tf-idf vectorizer with float32 type, but we can serialize the
         # resulting vectors using float16, meaning they take up half the memory on disk. Unfortunately
@@ -141,18 +157,7 @@ class CandidateGenerator:
         alias_tfidfs = alias_tfidfs[empty_tfidfs_boolean_flags]
         assert len(aliases) == np.size(alias_tfidfs, 0)
 
-        msg.text(f"Fitting ann index on {len(aliases)} aliases")
-        start_time = timer()
-        ann_index = nmslib.init(
-            method="hnsw", space="cosinesimil_sparse", data_type=nmslib.DataType.SPARSE_VECTOR
-        )
-        ann_index.addDataPointBatch(alias_tfidfs)
-        ann_index.createIndex(index_params, print_progress=verbose)
-        query_time_params = {"efSearch": self.ef_search}
-        ann_index.setQueryTimeParams(query_time_params)
-        end_time = timer()
-        total_time = end_time - start_time
-        msg.text(f"Fitting ann index took {round(total_time)} seconds")
+        ann_index = self._fit_ann_index(alias_tfidfs, msg, verbose)
 
         self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_tfidfs)
         return self
