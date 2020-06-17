@@ -97,7 +97,7 @@ class CandidateGenerator:
             "post": 0,
         }
 
-        msg.text(f"Fitting ann index on {len(alias_tfidfs)} aliases")
+        msg.text(f"Fitting ann index on {alias_tfidfs.shape[0]} aliases")
         start_time = timer()
         ann_index = nmslib.init(
             method="hnsw", space="cosinesimil_sparse", data_type=nmslib.DataType.SPARSE_VECTOR
