@@ -83,35 +83,6 @@ class CandidateGeneratoHnswlib:
         self.vectorizer = vectorizer
         self.alias_tfidfs = alias_tfidfs
 
-    def _fit_ann_index(self, alias_tfidfs, msg: Printer, verbose: bool):
-        # nmslib hyperparameters (very important)
-        # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
-        # m_parameter = 100
-        # # `C` for Construction. Set to the maximum recommended value
-        # # Improves recall at the expense of longer indexing time
-        # construction = 2000
-        # num_threads = 60  # set based on the machine
-        index_params = {
-            "M": self.m_parameter,
-            "indexThreadQty": self.n_threads,
-            "efConstruction": self.ef_construction,
-            "post": 0,
-        }
-
-        msg.text(f"Fitting ann index on {len(alias_tfidfs)} aliases")
-        start_time = timer()
-        ann_index = nmslib.init(
-            method="hnsw", space="cosinesimil_sparse", data_type=nmslib.DataType.SPARSE_VECTOR
-        )
-        ann_index.addDataPointBatch(alias_tfidfs)
-        ann_index.createIndex(index_params, print_progress=verbose)
-        query_time_params = {"efSearch": self.ef_search}
-        ann_index.setQueryTimeParams(query_time_params)
-        end_time = timer()
-        total_time = end_time - start_time
-        msg.text(f"Fitting ann index took {round(total_time)} seconds")
-        return ann_index
-
 
     def _fit_ann_index_hnswlib(self, alias_tfidfs, msg: Printer, verbose: bool):
         # nmslib hyperparameters (very important)
@@ -121,13 +92,14 @@ class CandidateGeneratoHnswlib:
         # # Improves recall at the expense of longer indexing time
         # construction = 2000
         # num_threads = 60  # set based on the machine
-        msg.text(f"Fitting ann index on {len(alias_tfidfs)} aliases")
+        msg.text(f"Fitting ann index on {alias_tfidfs.shape[0]} aliases")
         start_time = timer()
 
         (samples, features) = alias_tfidfs.shape
         ann_index = hnswlib.Index('cosine', features)
 
         ann_index.init_index(samples, self.ef_construction, self.m_parameter, random_seed = 2)
+        msg.text(f"{alias_tfidfs.shape}")
         ann_index.add_items(alias_tfidfs)
 
         end_time = timer()
@@ -135,27 +107,7 @@ class CandidateGeneratoHnswlib:
         msg.text(f"Fitting ann index took {round(total_time)} seconds")
         return ann_index
 
-
-    def fit(self, kb_aliases: List[str], verbose: bool = False):
-        """Build tfidf vectorizer and ann index.
-        Warning: Running this function can take a lot of memory
-        
-        kb_aliases (List[str]): Aliases in the KnoweledgeBase to fit 
-            the ANN index on.
-        verbose (bool, optional): Set to True to get print updates while fitting the index. Defaults to False.
-        
-        RETURNS (CandidateGenerator): An initialized CandidateGenerator
-        """        
-        msg = Printer(no_print=verbose)
-
-        # kb_aliases = self.kb.get_alias_strings()
-        short_aliases = set([a for a in kb_aliases if len(a) < 4])
-
-        # NOTE: here we are creating the tf-idf vectorizer with float32 type, but we can serialize the
-        # resulting vectors using float16, meaning they take up half the memory on disk. Unfortunately
-        # we can't use the float16 format to actually run the vectorizer, because of this bug in sparse
-        # matrix representations in scipy: https://github.com/scipy/scipy/issues/7408
-        
+    def _get_vectorized(self, kb_aliases, msg):
         msg.text(f"Fitting tfidf vectorizer on {len(kb_aliases)} aliases")
         tfidf_vectorizer = TfidfVectorizer(
             analyzer="char_wb", ngram_range=(3, 3), min_df=2, dtype=np.float32
@@ -181,7 +133,31 @@ class CandidateGeneratoHnswlib:
         alias_tfidfs = alias_tfidfs[empty_tfidfs_boolean_flags]
         assert len(aliases) == np.size(alias_tfidfs, 0)
 
-        ann_index = self._fit_ann_index(alias_tfidfs, msg, verbose)
+        return aliases, alias_tfidfs, tfidf_vectorizer
+
+
+    def fit(self, kb_aliases: List[str], verbose: bool = False):
+        """Build tfidf vectorizer and ann index.
+        Warning: Running this function can take a lot of memory
+        
+        kb_aliases (List[str]): Aliases in the KnoweledgeBase to fit 
+            the ANN index on.
+        verbose (bool, optional): Set to True to get print updates while fitting the index. Defaults to False.
+        
+        RETURNS (CandidateGenerator): An initialized CandidateGenerator
+        """        
+        msg = Printer(no_print=verbose)
+
+        short_aliases = set([a for a in kb_aliases if len(a) < 4])
+
+        # NOTE: here we are creating the tf-idf vectorizer with float32 type, but we can serialize the
+        # resulting vectors using float16, meaning they take up half the memory on disk. Unfortunately
+        # we can't use the float16 format to actually run the vectorizer, because of this bug in sparse
+        # matrix representations in scipy: https://github.com/scipy/scipy/issues/7408
+        
+        aliases, alias_tfidfs, tfidf_vectorizer = self._get_vectorized(kb_aliases, msg)
+
+        ann_index = self._fit_ann_index_hnswlib(alias_tfidfs.toarray(), msg, verbose)
 
         self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_tfidfs)
         return self
@@ -217,9 +193,11 @@ class CandidateGeneratoHnswlib:
         vectors = vectors[empty_vectors_boolean_flags]
 
         # call `knn_query` to get neighbors
-        original_neighbours = self.ann_index.knn_query(vectors, k=k)
+        original_neighbours = self.ann_index.knn_query(vectors.toarray(), k=k)
+        # print(original_neighbours)
 
-        neighbors, distances = zip(*[(x[0].tolist(), x[1].tolist()) for x in original_neighbours])
+        neighbors, distances = original_neighbours
+        # zip(*[(x[0].tolist(), x[1].tolist()) for x in original_neighbours])
         neighbors = list(neighbors)
         distances = list(distances)
 
