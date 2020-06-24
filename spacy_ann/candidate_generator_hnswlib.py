@@ -101,6 +101,7 @@ class CandidateGeneratoHnswlib:
         ann_index.init_index(samples, self.ef_construction, self.m_parameter, random_seed = 2)
         msg.text(f"{alias_tfidfs.shape}")
         ann_index.add_items(alias_tfidfs)
+        ann_index.set_ef(self.ef_search)
 
         end_time = timer()
         total_time = end_time - start_time
@@ -292,10 +293,10 @@ class CandidateGeneratoHnswlib:
         tfidf_vectorizer = joblib.load(tfidf_vectorizer_path)
         alias_tfidfs = scipy.sparse.load_npz(tfidf_vectors_path).astype(np.float32)
 
-        ann_index = hnswlib.Index(space='cosine', dim=aliases.shape[1])
+        ann_index = hnswlib.Index(space='cosine', dim=alias_tfidfs.shape[1])
         ann_index.set_num_threads(self.n_threads)
-        ann_index.set_ef(self.ef_search)
         ann_index.load_index(str(ann_index_path))
+        ann_index.set_ef(self.ef_search)
     
         self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_tfidfs)
 
