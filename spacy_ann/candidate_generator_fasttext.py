@@ -1,17 +1,10 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
-from typing import List, Dict, Set, Tuple
-import json
-from collections import defaultdict
+from typing import List, Set, Tuple
 from pathlib import Path
-import joblib
 import hnswlib
 import numpy as np
-import scipy
-from sklearn.feature_extraction.text import TfidfVectorizer
-import spacy
-from spacy.tokens import Doc, Span
-from spacy.util import ensure_path, to_disk, from_disk
+from spacy.util import to_disk, from_disk
 import srsly
 import fasttext
 from spacy_ann.types import AliasCandidate
@@ -68,8 +61,7 @@ class CandidateGeneratorFasttext:
         self.ann_index = ann_index
         self.alias_vectors = alias_vectors
 
-
-    def _fit_ann_index_hnswlib(self, alias_vectors: scipy.sparse.csr_matrix):
+    def _fit_ann_index_hnswlib(self, alias_vectors: np.array):
         # nmslib hyperparameters (very important)
         # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
         # m_parameter = 100
@@ -255,7 +247,7 @@ class CandidateGeneratorFasttext:
 
         aliases = srsly.read_json(aliases_path)
         short_aliases = srsly.read_json(short_aliases_path)
-        alias_vectors = scipy.load_npz(tfidf_vectors_path).astype(np.float32)
+        alias_vectors = np.load(tfidf_vectors_path).astype(np.float32)
 
         ann_index = hnswlib.Index(space='cosine', dim=alias_vectors.shape[1])
         ann_index.set_num_threads(self.n_threads)
@@ -283,7 +275,7 @@ class CandidateGeneratorFasttext:
             "aliases": lambda p: srsly.write_json(p.with_suffix(".json"), self.aliases),
             "short_aliases": lambda p: srsly.write_json(p.with_suffix(".json"), self.short_aliases),
             "ann_index": lambda p: self.ann_index.save_index(str(p.with_suffix(".bin"))),
-            "fasttext_vectors": lambda p: scipy.save_npz(
+            "fasttext_vectors": lambda p: np.savez(
                 p.with_suffix(".npz"), self.alias_vectors.astype(np.float16)
             ),
         }
