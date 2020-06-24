@@ -77,7 +77,7 @@ class CandidateGeneratorFasttext:
         self.alias_vectors = alias_vectors
 
 
-    def _fit_ann_index_hnswlib(self, alias_vectors: scipy.sparse.csr_matrix, verbose: bool):
+    def _fit_ann_index_hnswlib(self, alias_vectors: scipy.sparse.csr_matrix):
         # nmslib hyperparameters (very important)
         # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
         # m_parameter = 100
@@ -125,13 +125,11 @@ class CandidateGeneratorFasttext:
         return aliases, alias_vectors, tfidf_vectorizer
 
 
-    def fit(self, kb_aliases: List[str], verbose: bool = False):
+    def fit(self, kb_aliases: List[str]):
         """Build tfidf vectorizer and ann index.
         Warning: Running this function can take a lot of memory
         
-        kb_aliases (List[str]): Aliases in the KnoweledgeBase to fit 
-            the ANN index on.
-        verbose (bool, optional): Set to True to get print updates while fitting the index. Defaults to False.
+        kb_aliases (List[str]): Aliases in the KnoweledgeBase to fit the ANN index on.
         
         RETURNS (CandidateGenerator): An initialized CandidateGenerator
         """        
@@ -144,7 +142,7 @@ class CandidateGeneratorFasttext:
         
         aliases, alias_vectors, tfidf_vectorizer = self._get_vectorized(kb_aliases)
 
-        ann_index = self._fit_ann_index_hnswlib(alias_vectors.toarray(), verbose)
+        ann_index = self._fit_ann_index_hnswlib(alias_vectors.toarray())
 
         self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_vectors)
         return self
