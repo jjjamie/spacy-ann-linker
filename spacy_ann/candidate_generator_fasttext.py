@@ -208,7 +208,7 @@ class CandidateGeneratorFasttext:
         if mention_texts == []:
             return []
 
-        alias_vectors = _vectorize_aliases(mention_texts)
+        alias_vectors = self._vectorize_aliases(mention_texts)
 
         # `ann_index.knnQueryBatch` crashes if one of the vectors is all zeros.
         # `nmslib_knn_with_zero_vectors` is a wrapper around `ann_index.knnQueryBatch`
