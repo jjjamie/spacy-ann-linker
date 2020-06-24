@@ -1,9 +1,5 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
-#
-# Adapted from https://github.com/allenai/scispacy/blob/master/scispacy/candidate_generation.py
-# for use with spaCy KnowledgeBase
-
 from typing import List, Dict, Set, Tuple
 import json
 from collections import defaultdict
@@ -14,12 +10,10 @@ import numpy as np
 import scipy
 from sklearn.feature_extraction.text import TfidfVectorizer
 import spacy
-from spacy.kb import Candidate, KnowledgeBase
 from spacy.tokens import Doc, Span
 from spacy.util import ensure_path, to_disk, from_disk
 import srsly
 import fasttext
-from wasabi import Printer
 from spacy_ann.types import AliasCandidate
 from jbpython import Timer, get_logger
 
