@@ -98,10 +98,7 @@ class CandidateGeneratorFasttext:
     def _get_vectorized(self, kb_aliases: List[str]):
         _log.info(f"Getting fasttext vectors for {len(kb_aliases)} aliases")
         with Timer() as t:
-            alias_vectors = np.zeros((len(kb_aliases), self.fasttext_model.get_dimension()))
-            for i, a in enumerate(kb_aliases):
-                vector_for_alias = self.fasttext_model[a]
-                alias_vectors[i,:] = vector_for_alias
+            alias_vectors = self._vectorize_aliases(kb_aliases)
 
         _log.info(f"Getting vectors took {round(t.interval)} seconds")
 
@@ -109,6 +106,12 @@ class CandidateGeneratorFasttext:
 
         return kb_aliases, alias_vectors
 
+    def _vectorize_aliases(self, aliases: List[str]):
+        alias_vectors = np.zeros((len(aliases), self.fasttext_model.get_dimension()))
+        for i, a in enumerate(aliases):
+            vector_for_alias = self.fasttext_model[a]
+            alias_vectors[i,:] = vector_for_alias
+        return alias_vectors
 
     def fit(self, kb_aliases: List[str]):
         """Build tfidf vectorizer and ann index.
@@ -205,11 +208,7 @@ class CandidateGeneratorFasttext:
         if mention_texts == []:
             return []
 
-        with Timer() as t:
-            alias_vectors = np.zeros((len(mention_texts), self.fasttext_model.get_dimension()))
-            for i, a in enumerate(mention_texts):
-                vector_for_alias = self.fasttext_model[a]
-                alias_vectors[i,:] = vector_for_alias
+        alias_vectors = _vectorize_aliases(mention_texts)
 
         # `ann_index.knnQueryBatch` crashes if one of the vectors is all zeros.
         # `nmslib_knn_with_zero_vectors` is a wrapper around `ann_index.knnQueryBatch`
