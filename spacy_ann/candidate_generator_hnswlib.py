@@ -21,21 +21,15 @@ from spacy.kb import Candidate, KnowledgeBase
 from spacy.tokens import Doc, Span
 from spacy.util import ensure_path, to_disk, from_disk
 import srsly
-from timeit import default_timer as timer
 from wasabi import Printer
 from spacy_ann.types import AliasCandidate
+from jbpython import Timer, get_logger
 
 
-class CandidateGeneratoHnswlib:
-    """The CandidateGenerator encapsulates the logic to fit a list of 
-    string aliases into a searchable Approximate Nearest Neighbors index 
-    using the 3-Character-Gram TF-IDF representation of each alias. This 
-    index is useful for Entity Linking against a custom KnowledgeBase with a lower 
-    amount of total aliases than a typical wikidata/DBPedia like KnowledgeBase.
+_log = get_logger(__name__)
 
-    When you call an initialized CandidateGenerator with a batch of entity mentions,
-    it will return a list of `AliasCandidate` objects for each entity mention.
-    """
+
+class CandidateGeneratorHnswlib:
     def __init__(self,
                  *,
                  k: int = 5,
@@ -59,15 +53,14 @@ class CandidateGeneratoHnswlib:
         self.ef_search = ef_search
         self.ef_construction = ef_construction
         self.n_threads = n_threads
-
-        self.ann_index = True
+        self.ann_index = None
         
     def _initialize(self,
                     aliases: List[str],
                     short_aliases: Set[str],
-                    ann_index: FloatIndex,
+                    ann_index: hnswlib.Index,
                     vectorizer: TfidfVectorizer,
-                    alias_tfidfs: scipy.sparse.csr_matrix):
+                    alias_vectors: scipy.sparse.csr_matrix):
         """Used in `fit` and `from_disk` to initialize the CandidateGenerator with computed
         # TF-IDF Vectorizer and ANN Index
         
@@ -75,16 +68,16 @@ class CandidateGeneratoHnswlib:
         short_aliases (Set[str]): Aliases too short for a TF-IDF representation
         ann_index (FloatIndex): Computed ANN Index of TF-IDF representations for aliases
         vectorizer (TfidfVectorizer): TF-IDF Vectorizer to get vector representation of aliases
-        alias_tfidfs (scipy.sparse.csr_matrix): Computed TF-IDF Sparse Vectors for aliases
+        alias_vectors (scipy.sparse.csr_matrix): Computed TF-IDF Sparse Vectors for aliases
         """
         self.aliases = aliases
         self.short_aliases = short_aliases
         self.ann_index = ann_index
         self.vectorizer = vectorizer
-        self.alias_tfidfs = alias_tfidfs
+        self.alias_vectors = alias_vectors
 
 
-    def _fit_ann_index_hnswlib(self, alias_tfidfs, msg: Printer, verbose: bool):
+    def _fit_ann_index_hnswlib(self, alias_vectors: scipy.sparse.csr_matrix, verbose: bool):
         # nmslib hyperparameters (very important)
         # guide: https://github.com/nmslib/nmslib/blob/master/python_bindings/parameters.md
         # m_parameter = 100
@@ -92,49 +85,44 @@ class CandidateGeneratoHnswlib:
         # # Improves recall at the expense of longer indexing time
         # construction = 2000
         # num_threads = 60  # set based on the machine
-        msg.text(f"Fitting ann index on {alias_tfidfs.shape[0]} aliases")
-        start_time = timer()
+        (samples, features) = alias_vectors.shape
+        _log.info(f"Fitting ann index on {samples} aliases")
+        with Timer() as t:
+            ann_index = hnswlib.Index('cosine', features)
 
-        (samples, features) = alias_tfidfs.shape
-        ann_index = hnswlib.Index('cosine', features)
+            ann_index.init_index(samples, self.ef_construction, self.m_parameter, random_seed = 2)
+            _log.info(f"{alias_vectors.shape}")
+            ann_index.add_items(alias_vectors)
+            ann_index.set_ef(self.ef_search)
 
-        ann_index.init_index(samples, self.ef_construction, self.m_parameter, random_seed = 2)
-        msg.text(f"{alias_tfidfs.shape}")
-        ann_index.add_items(alias_tfidfs)
-        ann_index.set_ef(self.ef_search)
-
-        end_time = timer()
-        total_time = end_time - start_time
-        msg.text(f"Fitting ann index took {round(total_time)} seconds")
+        _log.info(f"Fitting ann index took {round(t.interval)} seconds")
         return ann_index
 
-    def _get_vectorized(self, kb_aliases, msg):
-        msg.text(f"Fitting tfidf vectorizer on {len(kb_aliases)} aliases")
+    def _get_vectorized(self, kb_aliases):
+        _log.info(f"Fitting tfidf vectorizer on {len(kb_aliases)} aliases")
         tfidf_vectorizer = TfidfVectorizer(
             analyzer="char_wb", ngram_range=(3, 3), min_df=2, dtype=np.float32
         )
-        start_time = timer()
-        alias_tfidfs = tfidf_vectorizer.fit_transform(kb_aliases)
-        end_time = timer()
-        total_time = end_time - start_time
-        msg.text(f"Fitting and saving vectorizer took {round(total_time)} seconds")
+        with Timer() as t:
+            alias_vectors = tfidf_vectorizer.fit_transform(kb_aliases)
+        _log.info(f"Fitting and saving vectorizer took {round(t.interval)} seconds")
 
-        msg.text(f"Finding empty (all zeros) tfidf vectors")
-        empty_tfidfs_boolean_flags = np.array(alias_tfidfs.sum(axis=1) != 0).reshape(-1,)
+        _log.info(f"Finding empty (all zeros) tfidf vectors")
+        empty_tfidfs_boolean_flags = np.array(alias_vectors.sum(axis=1) != 0).reshape(-1,)
         number_of_non_empty_tfidfs = sum(
             empty_tfidfs_boolean_flags == False
         )  # pylint: disable=singleton-comparison
-        total_number_of_tfidfs = np.size(alias_tfidfs, 0)
+        total_number_of_tfidfs = np.size(alias_vectors, 0)
 
-        msg.text(
+        _log.info(
             f"Deleting {number_of_non_empty_tfidfs}/{total_number_of_tfidfs} aliases because their tfidf is empty"
         )
         # remove empty tfidf vectors, otherwise nmslib will crash
         aliases = [alias for alias, flag in zip(kb_aliases, empty_tfidfs_boolean_flags) if flag]
-        alias_tfidfs = alias_tfidfs[empty_tfidfs_boolean_flags]
-        assert len(aliases) == np.size(alias_tfidfs, 0)
+        alias_vectors = alias_vectors[empty_tfidfs_boolean_flags]
+        assert len(aliases) == np.size(alias_vectors, 0)
 
-        return aliases, alias_tfidfs, tfidf_vectorizer
+        return aliases, alias_vectors, tfidf_vectorizer
 
 
     def fit(self, kb_aliases: List[str], verbose: bool = False):
@@ -147,8 +135,6 @@ class CandidateGeneratoHnswlib:
         
         RETURNS (CandidateGenerator): An initialized CandidateGenerator
         """        
-        msg = Printer(no_print=verbose)
-
         short_aliases = set([a for a in kb_aliases if len(a) < 4])
 
         # NOTE: here we are creating the tf-idf vectorizer with float32 type, but we can serialize the
@@ -156,11 +142,11 @@ class CandidateGeneratoHnswlib:
         # we can't use the float16 format to actually run the vectorizer, because of this bug in sparse
         # matrix representations in scipy: https://github.com/scipy/scipy/issues/7408
         
-        aliases, alias_tfidfs, tfidf_vectorizer = self._get_vectorized(kb_aliases, msg)
+        aliases, alias_vectors, tfidf_vectorizer = self._get_vectorized(kb_aliases)
 
-        ann_index = self._fit_ann_index_hnswlib(alias_tfidfs.toarray(), msg, verbose)
+        ann_index = self._fit_ann_index_hnswlib(alias_vectors.toarray(), verbose)
 
-        self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_tfidfs)
+        self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_vectors)
         return self
 
     def _nmslib_knn_with_zero_vectors(
@@ -291,14 +277,14 @@ class CandidateGeneratoHnswlib:
         aliases = srsly.read_json(aliases_path)
         short_aliases = srsly.read_json(short_aliases_path)
         tfidf_vectorizer = joblib.load(tfidf_vectorizer_path)
-        alias_tfidfs = scipy.sparse.load_npz(tfidf_vectors_path).astype(np.float32)
+        alias_vectors = scipy.sparse.load_npz(tfidf_vectors_path).astype(np.float32)
 
-        ann_index = hnswlib.Index(space='cosine', dim=alias_tfidfs.shape[1])
+        ann_index = hnswlib.Index(space='cosine', dim=alias_vectors.shape[1])
         ann_index.set_num_threads(self.n_threads)
         ann_index.load_index(str(ann_index_path))
         ann_index.set_ef(self.ef_search)
     
-        self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_tfidfs)
+        self._initialize(aliases, short_aliases, ann_index, tfidf_vectorizer, alias_vectors)
 
         return self
 
@@ -321,7 +307,7 @@ class CandidateGeneratoHnswlib:
             "ann_index": lambda p: self.ann_index.save_index(str(p.with_suffix(".bin"))),
             "tfidf_vectorizer": lambda p: joblib.dump(self.vectorizer, p.with_suffix(".joblib")),
             "tfidf_vectors_sparse": lambda p: scipy.sparse.save_npz(
-                p.with_suffix(".npz"), self.alias_tfidfs.astype(np.float16)
+                p.with_suffix(".npz"), self.alias_vectors.astype(np.float16)
             ),
         }
 
